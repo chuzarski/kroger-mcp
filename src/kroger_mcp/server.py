@@ -116,6 +116,15 @@ def create_server() -> FastMCP:
         - A product that is TEMPORARILY_OUT_OF_STOCK may be back later. Offer the next option, or
           search again later; stock levels change during the day.
 
+        Limits:
+        This server can only add items to the user's Kroger cart. It cannot check out, place an order, pay,
+        or schedule fulfillment: the user does that in the Kroger app or website, and the agent should say so
+        when the list is done. The Kroger API cannot read or change the real cart, so view_current_cart,
+        remove_from_cart and clear_current_cart only read or edit this server's own record of what it added.
+        They do not show what is in the real cart, and they do not remove anything from it. Never tell the
+        user an item was removed from their cart; tell them it was removed from this record, and that they
+        must remove it in the Kroger app.
+
         Authentication Flow:
         1. Use start_authentication to get an authorization URL
         2. Open the URL in your browser and authorize the application

@@ -14,6 +14,10 @@ RULES = {
     "alternate terms": "alternate",
     "out of stock": "TEMPORARILY_OUT_OF_STOCK",
     "check sign-in first": "get_authentication_info",
+    "no ordering": "cannot check out, place an order, pay",
+    "user finishes in the Kroger app": "the user does that in the Kroger app or website",
+    "cart tools are local": "only read or edit this server's own record",
+    "no removal from the real cart": "Never tell the user an item was removed from their cart",
 }
 
 
