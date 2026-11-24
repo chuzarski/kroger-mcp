@@ -117,28 +117,46 @@ async def test_simultaneous_refresh_by_another_process_is_used(mcp, requests_moc
 
 
 async def test_bulk_search_keeps_earlier_results_when_rate_limited(mcp, requests_mock, app_token):
-    products = requests_mock.get(f"{BASE}/v1/products", [
-        {"json": {"data": [{"productId": PRODUCT, "description": "Milk"}]}},
-        {"status_code": 429, "json": kroger_error("PRODUCT-4290", "Too many requests")},
-    ])
+    def respond(request, context):
+        # The searches run side by side, so the answer goes by term. The rate limit comes while the
+        # first searches are still running, and the searches that have not started are skipped.
+        term = request.qs["filter.term"][0]
+        if term == "bread":
+            time.sleep(0.1)
+            context.status_code = 429
+            return kroger_error("PRODUCT-4290", "Too many requests")
+        if term != "milk":
+            time.sleep(0.3)
+        return {"data": [{"productId": PRODUCT, "description": "Milk"}]}
+
+    products = requests_mock.get(f"{BASE}/v1/products", json=respond)
+    terms = ["milk", "bread"] + [f"item{i}" for i in range(10)]
     result = await call_ok(mcp, "bulk_search_products", {
-        "searches": [{"term": "milk"}, {"term": "bread"}, {"term": "eggs"}], "location_id": STORE})
-    assert products.call_count == 2
-    assert result["searches_successful"] == 1 and result["searches_completed"] == 2
+        "searches": [{"term": t} for t in terms], "location_id": STORE})
     assert result["results"][0]["count"] == 1
     assert result["results"][1]["error"]["type"] == "rate_limited"
-    assert result["results"][2] == {"term": "eggs", "success": False, "searched": False, "data": []}
+    skipped = [r for r in result["results"] if r.get("searched") is False]
+    assert len(skipped) >= 4
+    assert skipped[-1] == {"term": "item9", "success": False, "searched": False, "data": []}
+    assert products.call_count == len(terms) - len(skipped)
+    assert result["searches_completed"] == len(terms) - len(skipped)
     assert result["stopped_early"]["error_type"] == "rate_limited"
     assert "Do not retry" in result["stopped_early"]["next_step"]
 
 
 async def test_bulk_search_stops_at_the_first_network_failure(mcp, requests_mock, app_token):
+    from kroger_mcp.tools.product_tools import BULK_SEARCH_WORKERS
+
     products = requests_mock.get(f"{BASE}/v1/products", exc=requests.exceptions.ConnectionError("Network is unreachable"))
+    terms = [f"item{i}" for i in range(BULK_SEARCH_WORKERS + 7)]
     error, _ = await call_error(mcp, "bulk_search_products", {
-        "searches": [{"term": "milk"}, {"term": "bread"}, {"term": "eggs"}], "location_id": STORE})
-    assert products.call_count == 1
+        "searches": [{"term": t} for t in terms], "location_id": STORE})
+    # Searches already running when the first one fails still finish; the others never start
+    assert 1 <= products.call_count <= BULK_SEARCH_WORKERS
     assert error["type"] == "connection_error"
-    assert [r.get("searched", True) for r in error["results"]] == [True, False, False]
+    not_started = [r for r in error["results"] if r.get("searched") is False]
+    assert len(not_started) >= 7
+    assert [r["term"] for r in error["results"]] == terms
 
 
 async def test_bulk_search_checks_every_brand_before_searching(mcp, requests_mock, app_token):

@@ -5,6 +5,21 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Requires Python 3.11 or newer, and FastMCP 4.2.5 or newer** (MCP SDK v2). FastMCP 4.2 dropped Python 3.10. The server speaks the 2026-07-28 protocol revision and still serves clients that use the older ones.
+- **`bulk_search_products` returns a shortlist.** Each term's result has `options`: up to 3 one-line strings (product ID, name, size, price, sale price when on sale, stock level), `count` (options shown) and `more` (candidates not shown), instead of full product records. The search asks Kroger for `limit` products per term (default 10) and shows the best 3, with products that are temporarily out of stock after the others. `detail: "full"` brings back the full records, for at most 3 terms. More than 3 terms with `detail: "full"` fails with an `invalid_parameter` error (parameter `detail`). The `grocery_list_store_path` prompt now asks for full records, because the shortlist has no aisle locations. Clients that read `data` from each result must pass `detail: "full"`. In the test fixtures (25 terms, 10 full-size products each), the result went from about 840,000 characters to about 8,400.
+- `bulk_search_products` runs its terms side by side (5 at a time), and returns results in the order given. When a search fails in a way that would fail the rest too, the searches that are already running finish, and the ones that have not started are skipped.
+- Every tool declares whether it is read-only and whether it is destructive (`readOnlyHint`, `destructiveHint`), so clients can tell lookups from cart changes. `remove_from_cart`, `clear_current_cart` and `force_reauthenticate` are marked destructive.
+
+### Added
+
+- **The server renews the user's Kroger sign-in in the background** (every 15 minutes; `KROGER_REFRESH_INTERVAL_SECONDS`, `0` turns it off), with kroger-api's token-file lock, so an idle server does not lose its sign-in to expiry. Network errors are retried. If Kroger rejects the refresh token, renewing stops, and `get_authentication_info` shows `authenticated: false` and `refresh.state: "signin_needed"`. Every call of `get_authentication_info` now includes a `refresh` object (`state`, `last_success`, `reason`, `since`).
+- `GET /health` on the HTTP transports: a liveness check that never calls Kroger.
+- A `Dockerfile` for hosting the server over Streamable HTTP (non-root, `/data` volume for the sign-in and local state, healthcheck).
+
 ## [0.4.0] - 2026-10-22
 
 ### Changed

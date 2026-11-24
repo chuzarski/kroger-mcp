@@ -7,6 +7,7 @@ from typing import Annotated, Any, Dict, List, Optional
 from fastmcp import Context
 from pydantic import BaseModel, ConfigDict, Field
 
+from .annotations import DESTRUCTIVE, READ_ONLY, WRITE
 from ..errors import KrogerToolError, translate_errors
 from .params import Modality, ProductId, Quantity
 from .shared import (
@@ -142,7 +143,7 @@ def _add_to_cart(cart_items: List[Dict[str, Any]]) -> Optional[str]:
 def register_tools(mcp):
     """Register cart-related tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def add_items_to_cart(
         product_id: ProductId,
@@ -180,7 +181,7 @@ def register_tools(mcp):
             result["warning"] = warning
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def bulk_add_to_cart(
         items: Annotated[List[CartItem], Field(min_length=1)],
@@ -218,7 +219,7 @@ def register_tools(mcp):
             result["warning"] = warning
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def view_current_cart(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -250,7 +251,7 @@ def register_tools(mcp):
             }
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=DESTRUCTIVE)
     @translate_errors
     def remove_from_cart(
         product_id: Annotated[str, Field(min_length=1, description="The product ID to remove from the local tracking")],
@@ -314,7 +315,7 @@ def register_tools(mcp):
             "modality": modality
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=DESTRUCTIVE)
     @translate_errors
     def clear_current_cart(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -346,7 +347,7 @@ def register_tools(mcp):
             "items_cleared": items_count
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def mark_order_placed(
         order_notes: Optional[str] = None,
@@ -412,7 +413,7 @@ def register_tools(mcp):
             "placed_at": order_record["placed_at"]
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def view_order_history(
         limit: Annotated[int, Field(ge=1, le=50, description="Number of recent orders to show (1-50)")] = 10,

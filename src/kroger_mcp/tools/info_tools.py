@@ -6,6 +6,7 @@ from typing import Annotated, Any, Dict
 from pydantic import Field
 from fastmcp import Context
 
+from .annotations import READ_ONLY
 from ..errors import translate_errors
 from .params import DepartmentId
 from .shared import get_client_credentials_client, log_to_client, response_data
@@ -16,7 +17,7 @@ ChainName = Annotated[str, Field(min_length=1, description="Chain name, for exam
 def register_tools(mcp):
     """Register information-related tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def list_chains(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -47,7 +48,7 @@ def register_tools(mcp):
             "data": formatted_chains
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_chain_details(
         chain_name: ChainName,
@@ -74,7 +75,7 @@ def register_tools(mcp):
             "division_numbers": chain.get("divisionNumbers", [])
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def check_chain_exists(
         chain_name: ChainName,
@@ -101,7 +102,7 @@ def register_tools(mcp):
             "message": f"Chain '{chain_name}' {'exists' if exists else 'does not exist'}"
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def list_departments(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -132,7 +133,7 @@ def register_tools(mcp):
             "data": formatted_departments
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_department_details(
         department_id: DepartmentId,
@@ -161,7 +162,7 @@ def register_tools(mcp):
             "name": dept.get("name")
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def check_department_exists(
         department_id: DepartmentId,

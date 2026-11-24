@@ -9,6 +9,7 @@ from fastmcp import Context
 from kroger_api import validation
 from kroger_api.errors import InvalidParameterError, NotFoundError
 
+from .annotations import READ_ONLY, WRITE
 from ..errors import KrogerToolError, translate_errors
 from .params import LocationId, ZipCode
 from .shared import (
@@ -92,7 +93,7 @@ def _address(address: Optional[Dict[str, Any]]) -> Dict[str, str]:
 def register_tools(mcp):
     """Register location-related tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def search_locations(
         zip_code: ZipCode = None,
@@ -170,7 +171,7 @@ def register_tools(mcp):
             )
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_user_zip_code() -> Dict[str, Any]:
         """
@@ -195,7 +196,7 @@ def register_tools(mcp):
         return {"user_zip_code": _default_zip_code(), "configured": True}
 
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_location_details(
         location_id: LocationId,
@@ -245,7 +246,7 @@ def register_tools(mcp):
         
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def set_preferred_location(
         location_id: LocationId,
@@ -277,7 +278,7 @@ def register_tools(mcp):
             "message": f"Preferred location set to {loc_data.get('name', location_id)}"
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_preferred_location(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -324,7 +325,7 @@ def register_tools(mcp):
             }
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def check_location_exists(
         location_id: LocationId,

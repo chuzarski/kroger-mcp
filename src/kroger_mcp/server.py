@@ -16,7 +16,14 @@ Environment Variables Required:
 - KROGER_USER_ZIP_CODE: Default zip code for location searches (optional)
 """
 
+import asyncio
+import contextlib
+import logging
+
 from fastmcp import FastMCP
+from fastmcp.server.lifespan import lifespan
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from kroger_api.utils.env import load_env_file
 
@@ -32,6 +39,35 @@ from .tools import auth_tools
 # Import prompts
 from . import prompts
 from .errors import ToolErrorMiddleware
+from .tools.signin_status import status as signin_status
+from .tools.token_refresh import refresh_interval, run_refresh_loop
+
+logger = logging.getLogger(__name__)
+
+
+async def _run_refresh_loop(interval: float) -> None:
+    """Run the refresh loop; whatever goes wrong in it must not take the server down"""
+    try:
+        await run_refresh_loop(interval)
+    except Exception:
+        logger.exception("The Kroger token refresh stopped unexpectedly; the sign-in is now renewed only on use")
+
+
+@lifespan
+async def refresh_lifespan(server):
+    """Keep the Kroger sign-in renewed for as long as the server runs"""
+    interval = refresh_interval()
+    if interval <= 0:
+        yield {}
+        return
+    # A plain task, not a task group: the lifespan may be entered and left from different tasks
+    task = asyncio.get_running_loop().create_task(_run_refresh_loop(interval), name="kroger-token-refresh")
+    try:
+        yield {}
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def create_server() -> FastMCP:
@@ -42,6 +78,7 @@ def create_server() -> FastMCP:
     # Initialize the FastMCP server
     mcp = FastMCP(
         name="Kroger API Server",
+        lifespan=refresh_lifespan,
         instructions="""
         This MCP server provides access to Kroger's API for grocery shopping functionality.
         
@@ -56,7 +93,10 @@ def create_server() -> FastMCP:
         1. Set a preferred location with set_preferred_location
         2. Search for products with search_products
         3. Add items to cart with add_items_to_cart
-        4. Use bulk_add_to_cart for multiple items at once
+        4. Use bulk_add_to_cart for multiple items at once. To find many items, use
+           bulk_search_products: it returns a shortlist of up to 3 one-line options per term.
+           When the options differ in brand, price or type, ask the user which they want before
+           adding anything; items added to the cart cannot be removed from the real Kroger cart.
         5. View current cart with view_current_cart
         6. Mark order as placed with mark_order_placed
         
@@ -80,6 +120,17 @@ def create_server() -> FastMCP:
         the same call unchanged.
         """
     )
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> JSONResponse:
+        """Liveness for a container healthcheck (HTTP transports only)
+
+        Answers 200 while the process serves requests. It never calls Kroger, and it
+        stays 200 when the sign-in needs attention: restarting the server cannot fix
+        that, and would only lose a sign-in in progress. The sign-in state is in the
+        body, and in get_authentication_info.
+        """
+        return JSONResponse({"status": "ok", "refresh": signin_status.as_dict()})
 
     # Return tool failures as error results with structured details
     mcp.add_middleware(ToolErrorMiddleware())

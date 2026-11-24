@@ -6,13 +6,14 @@ from typing import Dict, Any
 from datetime import datetime
 from fastmcp import Context
 
+from .annotations import READ_ONLY
 from ..errors import translate_errors
 
 
 def register_tools(mcp):
     """Register utility tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     async def get_current_datetime(ctx: Context = None) -> Dict[str, Any]:
         """

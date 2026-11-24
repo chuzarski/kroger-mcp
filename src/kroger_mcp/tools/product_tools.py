@@ -2,7 +2,9 @@
 Product search and management tools for Kroger MCP server
 """
 
-from typing import Annotated, Any, Dict, List, Optional
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from fastmcp import Context
 from fastmcp.utilities.types import Image
@@ -18,8 +20,10 @@ from kroger_api.errors import (
     NotFoundError,
 )
 
+from .annotations import READ_ONLY
 from ..errors import KrogerToolError, translate_errors
 from .params import Brand, Fulfillment, OptionalLocationId, ProductId, ProductLimit, SearchTerm
+from .shortlist import SHORTLIST_SIZE, shortlist_for_term
 from .shared import (
     get_client_credentials_client, 
     get_preferred_location_id,
@@ -28,6 +32,12 @@ from .shared import (
     format_currency,
     response_data,
 )
+
+# Searches of a bulk search that run side by side
+BULK_SEARCH_WORKERS = 5
+
+# Most terms a bulk search may ask full product records for
+MAX_FULL_TERMS = 3
 
 # Seconds to wait for a product image download
 IMAGE_TIMEOUT = 30
@@ -238,7 +248,7 @@ def _check_location_exists(client, location_id: str) -> None:
 def register_tools(mcp):
     """Register product-related tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_product_images(
         product_id: ProductId,
@@ -322,7 +332,7 @@ def register_tools(mcp):
         # Kroger images are typically JPEG
         return Image(data=response.content, format="jpeg")
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def search_products(
         search_term: SearchTerm,
@@ -378,52 +388,83 @@ def register_tools(mcp):
         log_to_client(ctx, f"Found {result['count']} products")
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def bulk_search_products(
         searches: Annotated[List[ProductSearch], Field(min_length=1, max_length=25)],
         location_id: OptionalLocationId = None,
+        detail: Annotated[Literal["shortlist", "full"], Field(
+            description=(
+                f"'shortlist' (default) returns up to {SHORTLIST_SIZE} one-line options per term. "
+                f"'full' returns every product's full record and is allowed for at most {MAX_FULL_TERMS} terms."
+            ),
+        )] = "shortlist",
         ctx: Context = None
     ) -> Dict[str, Any]:
         """
-        Search for multiple products in a single tool call to reduce round-trips.
+        Search for several products in one call, and get a shortlist for each term.
+
+        Each term's result lists up to 3 options, one line each: product ID, name,
+        size, price, sale price (only when on sale) and stock level. Compare the
+        options before adding anything: when they differ in brand, price or type
+        (organic, for example), ask the user which they want. Items added to the
+        cart cannot be removed from the real Kroger cart through this server.
+        Pass the chosen product ID to add_items_to_cart or bulk_add_to_cart.
+
+        An empty result does not mean the store does not stock the item: try an
+        alternate term. A product that is TEMPORARILY_OUT_OF_STOCK may be back
+        later; the next option or a later search may do.
 
         Args:
             searches: List of search queries (1-25). Each item should have:
                       - term: The search term (e.g., "milk", "bread"); 3+ characters, at most 8 words
-                      - limit: Number of results per search (1-50, default: 10)
+                      - limit: Number of candidates to consider per term (1-50, default: 10).
+                               The shortlist shows the best 3 of them; "more" counts the rest.
                       - fulfillment: Optional fulfillment filter ("ais", "csp", "dth", "sth")
                       - brand: Optional brand filter (case-sensitive)
             location_id: Store location ID applied to all searches (uses preferred if not provided)
+            detail: "shortlist" (default), or "full" for complete product records of at most 3 terms
 
         Returns:
-            Dictionary containing results for each search term. A search that fails
-            has success false and an error object. An error that would fail every
+            Dictionary containing results for each search term, in the order given.
+            In a shortlist, each result has success, count (options shown), options
+            (the lines) and more (candidates not shown). A search that fails has
+            success false and an error object. An error that would fail every
             later search too, such as a rate limit or a network failure, stops the
-            remaining searches: they have success false and searched false. The
-            call fails only if no search succeeded.
+            searches that have not started yet: they have success false and
+            searched false. The call fails only if no search succeeded.
         """
         # Check every term and brand before sending any request
         for index, search in enumerate(searches):
             validation.search_term(search.term, param=f"searches[{index}].term")
             if search.brand is not None:
                 validation.check_non_empty(f"searches[{index}].brand", search.brand)
+        if detail == "full" and len(searches) > MAX_FULL_TERMS:
+            raise KrogerToolError(
+                "invalid_parameter",
+                f"detail 'full' returns every product's full record, so it is limited to {MAX_FULL_TERMS} terms; "
+                f"this call has {len(searches)}.",
+                next_step=(
+                    "Use the default detail 'shortlist' for many terms, then call get_product_details for the "
+                    f"products you want in full, or split the call into groups of {MAX_FULL_TERMS} terms or fewer."
+                ),
+                details={"param": "detail", "value": detail},
+            )
         location_id = resolve_location_id(location_id)
 
         log_to_client(ctx, f"Running {len(searches)} product searches at location {location_id}")
 
         client = get_client_credentials_client()
-        results = []
-        stopped_by: Optional[KrogerAPIError] = None
 
-        for search in searches:
-            if stopped_by is not None:
-                results.append({"term": search.term, "success": False, "searched": False, "data": []})
-                continue
-            log_to_client(ctx, f"Searching for '{search.term}'")
+        # The terms are searched side by side. When one search fails in a way that
+        # would fail the rest too, the searches that have not started are skipped.
+        stop = threading.Event()
 
+        def run(search: ProductSearch):
+            if stop.is_set():
+                return None
             try:
-                products = client.product.search_products(
+                return client.product.search_products(
                     term=search.term,
                     location_id=location_id,
                     limit=search.limit,
@@ -432,22 +473,52 @@ def register_tools(mcp):
                 )
             except KrogerAPIError as e:
                 if not isinstance(e, _PER_SEARCH_ERRORS):
-                    stopped_by = e
-                log_to_client(ctx, f"Error searching for '{search.term}': {e.message.splitlines()[0]}", level="warning")
+                    stop.set()
+                return e
+
+        with ThreadPoolExecutor(max_workers=BULK_SEARCH_WORKERS) as pool:
+            responses = list(pool.map(run, searches))
+
+        results = []
+        stopped_by: Optional[KrogerAPIError] = None
+        candidates = 0
+
+        for search, products in zip(searches, responses):
+            if products is None:
+                results.append({"term": search.term, "success": False, "searched": False, "data": []})
+                continue
+            if isinstance(products, KrogerAPIError):
+                if stopped_by is None and not isinstance(products, _PER_SEARCH_ERRORS):
+                    stopped_by = products
+                log_to_client(ctx, f"Error searching for '{search.term}': {products.message.splitlines()[0]}", level="warning")
                 results.append({
                     "term": search.term,
                     "success": False,
-                    "error": KrogerToolError.from_api_error(e).to_dict(),
+                    "error": KrogerToolError.from_api_error(products).to_dict(),
                     "data": []
                 })
                 continue
 
             result = {"term": search.term, "success": True}
-            if not _search_results(products, result):
-                result["message"] = f"No products found matching '{search.term}'"
+            if detail == "full":
+                found = _search_results(products, result)
+                if not found:
+                    result["message"] = f"No products found matching '{search.term}'"
+            else:
+                found = [_format_product(p) for p in (products or {}).get("data") or []]
+                options, more = shortlist_for_term(found)
+                result.update({"count": len(options), "options": options, "more": more})
+                warnings = ((products or {}).get("meta") or {}).get("warnings")
+                if warnings:
+                    result["api_warnings"] = warnings
+                if not found:
+                    result["message"] = (
+                        f"No products found matching '{search.term}'. An empty result does not mean the item is "
+                        f"not stocked: try an alternate term, such as a more general or differently worded one."
+                    )
+            candidates += len(found)
             results.append(result)
 
-        total_found = sum(r.get("count", 0) for r in results)
         successful = sum(1 for r in results if r.get("success"))
 
         if successful == 0:
@@ -462,17 +533,17 @@ def register_tools(mcp):
                 next_step=results[0]["error"].get("next_step"),
                 details={"results": results},
             )
-        if total_found == 0:
+        if candidates == 0:
             _check_location_exists(client, location_id)
 
-        log_to_client(ctx, f"Completed {len(searches)} searches: {successful} successful, {total_found} total products found")
+        log_to_client(ctx, f"Completed {len(searches)} searches: {successful} successful, {candidates} total products found")
 
         response = {
             "success": True,
             "location_id": location_id,
             "searches_completed": sum(1 for r in results if r.get("searched", True)),
             "searches_successful": successful,
-            "total_products_found": total_found,
+            "total_products_found": candidates,
             "results": results
         }
         if stopped_by is not None:
@@ -484,7 +555,7 @@ def register_tools(mcp):
             }
         return response
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_product_details(
         product_id: ProductId,
@@ -514,7 +585,7 @@ def register_tools(mcp):
         )
         return {"success": True, **_format_product(product, all_image_sizes=True), "location_id": location_id}
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def search_products_by_id(
         product_id: ProductId,

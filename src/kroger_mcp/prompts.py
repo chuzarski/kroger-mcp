@@ -24,7 +24,7 @@ def register_prompts(mcp):
 
 {grocery_list}
 
-Can you help me find the most efficient path through the store? Please search for these products to determine their aisle locations, then arrange them in a logical shopping order. 
+Can you help me find the most efficient path through the store? Please look up each product's aisle location, then arrange them in a logical shopping order. Aisle locations are in the full product records: use search_products for each item, or bulk_search_products with detail "full" for up to 3 items per call. The default bulk_search_products shortlist has no aisle locations.
 
 If you can't find exact matches for items, please suggest similar products that are available.
 

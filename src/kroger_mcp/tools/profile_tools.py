@@ -5,6 +5,10 @@ User profile and authentication tools for Kroger MCP server
 from typing import Dict, Any
 from fastmcp import Context
 
+from kroger_api.token_storage import USER_TOKEN_FILE, load_token
+
+from .annotations import DESTRUCTIVE, READ_ONLY
+from .signin_status import SIGNIN_NEEDED, status as signin_status
 from ..errors import KrogerToolError, SIGN_IN_STEP, translate_errors
 from .shared import get_authenticated_client, log_to_client, response_data, sign_out
 
@@ -12,7 +16,7 @@ from .shared import get_authenticated_client, log_to_client, response_data, sign
 def register_tools(mcp):
     """Register profile-related tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_user_profile(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -38,7 +42,7 @@ def register_tools(mcp):
             "note": "The Kroger Identity API only provides the profile ID for privacy reasons."
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def test_authentication(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -85,20 +89,37 @@ def register_tools(mcp):
         
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY)
     @translate_errors
     def get_authentication_info(ctx: Context = None) -> Dict[str, Any]:
         """
         Get information about the current authentication state and token.
 
         A user who is not signed in is a normal result (authenticated false),
-        not an error.
-        
+        not an error. So is a sign-in that Kroger no longer accepts: the server
+        renews the sign-in in the background, and when Kroger rejects the
+        refresh token the user has to sign in again.
+
         Returns:
-            Dictionary containing authentication information
+            Dictionary containing authentication information, and "refresh":
+            the state of the background renewal (ok, retrying, signin_needed,
+            signed_out or unknown), when it last worked, and why it needs
+            attention
         """
         log_to_client(ctx, "Getting authentication information")
-        
+
+        # A sign-in made by another process that shares the token file clears signin_needed
+        signin_status.note_saved_token(load_token(USER_TOKEN_FILE))
+        refresh = signin_status.as_dict()
+        if refresh["state"] == SIGNIN_NEEDED:
+            # The access token may still work for a while, but nothing can renew it
+            return {
+                "success": True,
+                "authenticated": False,
+                "message": f"Kroger no longer accepts the saved sign-in ({refresh['reason']}). {SIGN_IN_STEP}",
+                "refresh": refresh,
+            }
+
         try:
             client = get_authenticated_client()
         except KrogerToolError as e:
@@ -107,13 +128,15 @@ def register_tools(mcp):
             return {
                 "success": True,
                 "authenticated": False,
-                "message": f"{e.message} {SIGN_IN_STEP}"
+                "message": f"{e.message} {SIGN_IN_STEP}",
+                "refresh": signin_status.as_dict(),
             }
             
         result = {
             "success": True,
             "authenticated": True,
-            "message": "User is authenticated"
+            "message": "User is authenticated",
+            "refresh": signin_status.as_dict(),
         }
         
         token_info = client.client.token_info
@@ -136,7 +159,7 @@ def register_tools(mcp):
         
         return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=DESTRUCTIVE)
     @translate_errors
     def force_reauthenticate(ctx: Context = None) -> Dict[str, Any]:
         """

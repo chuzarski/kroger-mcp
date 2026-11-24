@@ -32,15 +32,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # The oldest and newest Python versions the package supports
-        python: ["3.10", "3.14"]
+        python: ["3.11", "3.14"]
         lowest: [false]
         include:
           # Every dependency at the lowest version pyproject.toml allows, on the oldest Python
           - os: ubuntu-latest
-            python: "3.10"
+            python: "3.11"
             lowest: true
           - os: windows-latest
-            python: "3.10"
+            python: "3.11"
             lowest: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

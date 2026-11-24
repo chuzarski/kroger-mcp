@@ -16,6 +16,8 @@ from urllib.parse import urlparse, parse_qs
 from kroger_api.utils import generate_pkce_parameters
 from kroger_api import KrogerAPI
 
+from .annotations import WRITE
+from .signin_status import status as signin_status
 from ..errors import KrogerToolError, translate_errors
 from .shared import invalidate_authenticated_client, log_to_client
 
@@ -51,7 +53,7 @@ def user_scopes() -> str:
 def register_tools(mcp):
     """Register authentication-specific tools with the FastMCP server"""
     
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def start_authentication(ctx: Context = None) -> Dict[str, Any]:
         """
@@ -103,7 +105,7 @@ def register_tools(mcp):
             ).format(auth_url=auth_url)
         }
     
-    @mcp.tool()
+    @mcp.tool(annotations=WRITE)
     @translate_errors
     def complete_authentication(redirect_url: str, ctx: Context = None) -> Dict[str, Any]:
         """
@@ -189,6 +191,7 @@ def register_tools(mcp):
                 _pkce_params, _auth_state = None, None
         # The cart tools must use the new token, not a cached client
         invalidate_authenticated_client()
+        signin_status.sign_in_completed()
         
         log_to_client(ctx, "Authentication successful!")
         

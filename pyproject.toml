@@ -11,14 +11,13 @@ authors = [
     {name = "Stephen Thoemmes", email = "thoemmes.stephen@gmail.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["kroger", "mcp", "grocery", "shopping", "retail"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -27,9 +26,10 @@ classifiers = [
 ]
 
 dependencies = [
-    # 3.4.0 added ToolResult(is_error=...), which the error results need, and
-    # 3.4.3 raises fastmcp's ValidationError for invalid arguments (see errors.py)
-    "fastmcp>=3.4.3,<4",
+    # 4.2 needs Python 3.11 and runs on MCP SDK v2. 3.4.0 added ToolResult(is_error=...),
+    # which the error results need, and 3.4.3 raises fastmcp's ValidationError for invalid
+    # arguments (see errors.py)
+    "fastmcp>=4.2.5,<5",
     # The tools run in worker threads and send log messages with anyio.from_thread
     "anyio>=4.5",
     "kroger-api>=0.4.0",

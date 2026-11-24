@@ -27,6 +27,8 @@ def isolated(tmp_path, monkeypatch, requests_mock):
     monkeypatch.delenv("KROGER_REDIRECT_URI", raising=False)
     monkeypatch.delenv("KROGER_USER_ZIP_CODE", raising=False)
     monkeypatch.delenv("KROGER_USER_SCOPES", raising=False)
+    # No background refresh unless a test asks for one
+    monkeypatch.setenv("KROGER_REFRESH_INTERVAL_SECONDS", "0")
     # State files found in the working directory are migrated, so use an empty one
     cwd = tmp_path / "cwd"
     cwd.mkdir()

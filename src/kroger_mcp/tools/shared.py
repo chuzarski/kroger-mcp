@@ -21,6 +21,7 @@ from kroger_api.token_storage import USER_TOKEN_FILE, clear_token, load_token, g
 from kroger_api.utils.locking import file_lock
 
 from ..errors import KrogerToolError, SIGN_IN_STEP
+from .signin_status import fingerprint, status as signin_status
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ def get_authenticated_client() -> KrogerAPI:
         _authenticated_client = None
 
         saved = load_token(USER_TOKEN_FILE)
+        # A different saved token than the one Kroger rejected: someone signed in again
+        signin_status.note_saved_token(saved)
+        generation = signin_status.generation
         if not isinstance(saved, dict) or not saved.get("access_token"):
             raise _authentication_required("The user is not signed in to Kroger, and this tool needs their permission.")
         client = KrogerAPI()
@@ -120,6 +124,9 @@ def get_authenticated_client() -> KrogerAPI:
                 f"The user's Kroger sign-in has expired and cannot be renewed: {e.message}"
             ) from e
         except BadRequestError as e:
+            signin_status.mark_signin_needed(
+                e.kroger_message or e.message.splitlines()[0], fingerprint(saved.get("access_token")), generation
+            )
             raise _authentication_required(
                 f"The user's Kroger sign-in has expired and could not be renewed: "
                 f"{e.kroger_message or e.message.splitlines()[0]}",
@@ -155,6 +162,7 @@ def sign_out() -> None:
     with _authenticated_client_lock:
         _authenticated_client = None
         clear_token(USER_TOKEN_FILE)
+        signin_status.mark_signed_out()
 
 
 def resolve_data_file(filename: str) -> str:

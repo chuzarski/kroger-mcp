@@ -169,10 +169,14 @@ async def test_api_warnings_are_passed_through(mcp, requests_mock, app_token):
 
 
 async def test_bulk_search_reports_each_failed_search(mcp, requests_mock, app_token):
-    requests_mock.get(f"{BASE}/v1/products", [
-        {"json": {"data": [{"productId": PRODUCT, "description": "Milk"}]}},
-        {"status_code": 500, "json": kroger_error("PRODUCT-5000", "Internal error")},
-    ])
+    def respond(request, context):
+        # The searches run side by side, so the answer goes by term, not by the order of the requests
+        if request.qs["filter.term"][0] == "bread":
+            context.status_code = 500
+            return kroger_error("PRODUCT-5000", "Internal error")
+        return {"data": [{"productId": PRODUCT, "description": "Milk"}]}
+
+    requests_mock.get(f"{BASE}/v1/products", json=respond)
     result = await call_ok(mcp, "bulk_search_products",
                            {"searches": [{"term": "milk"}, {"term": "bread"}], "location_id": STORE})
     assert result["searches_successful"] == 1

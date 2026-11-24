@@ -156,6 +156,30 @@ fastmcp dev server.py --with-editable .
 ```
 
 
+### 🐳 Hosting it (Docker, Streamable HTTP)
+
+The `Dockerfile` builds an image that serves the MCP endpoint at `/mcp` on port 8000 (Python 3.12, runs as a non-root user; tested on arm64). If you bind-mount a directory at `/data` instead of using a named volume, it must be writable by uid 10001:
+
+```bash
+docker build -t kroger-mcp .
+docker run -d --name kroger-mcp -v kroger-data:/data \
+    -e KROGER_CLIENT_ID=... -e KROGER_CLIENT_SECRET=... \
+    -e KROGER_REDIRECT_URI=http://localhost:8000/callback \
+    -p 127.0.0.1:8000:8000 kroger-mcp
+```
+
+| Setting | Meaning |
+|---------|---------|
+| `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET` | Your Kroger app's credentials (required) |
+| `KROGER_REDIRECT_URI` | Must match the redirect URI registered with Kroger (default `http://localhost:8000/callback`) |
+| `KROGER_TOKEN_DIR` | Where the saved sign-in, preferred store and local cart record live. The image sets `/data`: mount a volume there, or the sign-in is lost whenever the container is replaced |
+| `KROGER_USER_ZIP_CODE`, `KROGER_USER_SCOPES` | Optional, as above |
+| `KROGER_REFRESH_INTERVAL_SECONDS` | Seconds between background renewals of the user's sign-in (default 900; `0` turns it off) |
+
+- **No client authentication.** The server accepts any request that reaches it. Keep it on a private network, behind a reverse proxy or gateway that checks who is calling. It answers requests whatever `Host` header the proxy forwards; to restrict hosts, use FastMCP's own `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION` and `FASTMCP_HTTP_ALLOWED_HOSTS` settings.
+- **`GET /health`** is a liveness check (the image's `HEALTHCHECK` uses it). It answers 200 while the server runs, never calls Kroger, and stays 200 when the sign-in needs attention, because restarting the container cannot fix a dead sign-in. The sign-in state is in its body and in `get_authentication_info`.
+- **Signing in** works as usual: `start_authentication`, open the URL, approve, then give `complete_authentication` the URL the browser was sent to. When that page does not load (the redirect points at `localhost`), copy the URL from the address bar anyway. A sign-in in progress is kept in memory, so restarting the server in the middle of one means starting it again.
+
 ## 🛠️ Features
 
 ### 💬 Built-In MCP Prompts
@@ -181,7 +205,7 @@ fastmcp dev server.py --with-editable .
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
 | `search_products` | Search for products by name, brand, or other criteria | No |
-| `bulk_search_products` | Run up to 25 product searches in a single call | No |
+| `bulk_search_products` | Run up to 25 product searches in a single call; returns a shortlist of up to 3 one-line options per term | No |
 | `get_product_details` | Get detailed product information including pricing | No |
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
@@ -323,6 +347,12 @@ A search that finds nothing is not an error: it returns `count: 0` and a message
 ## 🍪 OAuth2 Authentication
 
 When Claude attempts to modify your Kroger account, you will be asked to insert a link into your browser that will handle authentication and allow Claude to add/remove items from your cart. Ensure that you have already made a Kroger account (this is different than your Kroger development account) before attempting to paste this link into your browser to initiate authentication.
+
+### Keeping the sign-in alive
+
+Kroger access tokens last 30 minutes. While the server runs, it renews the saved sign-in in the background every 15 minutes (`KROGER_REFRESH_INTERVAL_SECONDS`), so an idle server does not find it expired. If a renewal fails because of the network or a Kroger outage, the server retries and keeps trying every cycle. If Kroger rejects the refresh token, the server stops renewing and `get_authentication_info` reports `authenticated: false` with `refresh.state: "signin_needed"`: sign in again with `start_authentication`. The cart and profile tools still renew an expired token on use.
+
+Kroger issues a new refresh token each time it renews the sign-in (observed over three renewals), and the server saves it. A sign-in therefore belongs to one deployment: do not point two servers at copies of the same token file, because each renewal makes the other copy's refresh token stale. Servers that share one token file (one directory, such as `KROGER_TOKEN_DIR`) are safe: renewals take a file lock.
 
 ## 🤝 Contributing
 
