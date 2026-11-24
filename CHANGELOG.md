@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The server renews the user's Kroger sign-in in the background** (every 15 minutes; `KROGER_REFRESH_INTERVAL_SECONDS`, `0` turns it off), with kroger-api's token-file lock, so an idle server does not lose its sign-in to expiry. Network errors are retried. If Kroger rejects the refresh token, renewing stops, and `get_authentication_info` shows `authenticated: false` and `refresh.state: "signin_needed"`. Every call of `get_authentication_info` now includes a `refresh` object (`state`, `last_success`, `reason`, `since`).
+- **Shopping rules in the server instructions**: check the sign-in first, decide before adding (ask the user when options differ, because items added to the cart cannot be removed from the real cart), quantities (sold by weight is 1, packaged is one per unit, enough units for the size needed), try alternate terms when a search is empty, and what to do with temporarily out-of-stock products.
 - `GET /health` on the HTTP transports: a liveness check that never calls Kroger.
 - A `Dockerfile` for hosting the server over Streamable HTTP (non-root, `/data` volume for the sign-in and local state, healthcheck).
 

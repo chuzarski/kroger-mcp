@@ -100,6 +100,22 @@ def create_server() -> FastMCP:
         5. View current cart with view_current_cart
         6. Mark order as placed with mark_order_placed
         
+        Shopping rules:
+        - Check the sign-in first. Call get_authentication_info before a shopping session: a dead
+          sign-in found in the middle of a list wastes the work already done. When it says the user is
+          not authenticated, or refresh.state is signin_needed, follow the Authentication Flow below.
+        - Decide before adding. When the search results for an item differ in brand, price or type
+          (organic, for example), ask the user which they want, with the prices. Never add a guess and
+          swap it later: items added to the cart cannot be removed from the real Kroger cart through
+          this server.
+        - Quantities. An item sold by weight (produce, meat, deli) is quantity 1: Kroger weighs it when the
+          order is fulfilled, and a packaged pound of meat is one item. A packaged item is one per unit. When the
+          size is smaller than the amount needed (an 8 oz bag when 16 oz is needed), add enough units.
+        - An empty search result does not mean the store does not stock the item. Try an alternate
+          term: a more general or differently worded one, or the brand.
+        - A product that is TEMPORARILY_OUT_OF_STOCK may be back later. Offer the next option, or
+          search again later; stock levels change during the day.
+
         Authentication Flow:
         1. Use start_authentication to get an authorization URL
         2. Open the URL in your browser and authorize the application
